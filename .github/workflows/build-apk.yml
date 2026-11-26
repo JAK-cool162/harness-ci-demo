@@ -5,6 +5,13 @@ on:
     branches: [main]
   workflow_dispatch:
 
+# Pinned on purpose. Do not derive these from whatever the runner happens to
+# ship, or targetSdk drifts between builds.
+env:
+  MIN_SDK: '26'
+  TARGET_SDK: '35'
+  BUILD_TOOLS: '35.0.0'
+
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -18,49 +25,78 @@ jobs:
           distribution: temurin
           java-version: '17'
 
-      # The runner already ships an Android SDK. Reuse it instead of downloading one.
-      - name: Resolve Android toolchain
+      - name: Install pinned Android toolchain
         run: |
           set -e
           SDKMANAGER="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
+          BT="$ANDROID_HOME/build-tools/$BUILD_TOOLS"
+          PLAT="$ANDROID_HOME/platforms/android-$TARGET_SDK"
 
-          BT=$(ls -d "$ANDROID_HOME"/build-tools/* 2>/dev/null | sort -V | tail -1 || true)
-          if [ -z "$BT" ]; then
-            echo "No build-tools found, installing..."
-            yes | "$SDKMANAGER" "build-tools;35.0.0" >/dev/null
-            BT=$(ls -d "$ANDROID_HOME"/build-tools/* | sort -V | tail -1)
+          if [ ! -d "$BT" ]; then
+            echo "Installing build-tools;$BUILD_TOOLS"
+            yes | "$SDKMANAGER" "build-tools;$BUILD_TOOLS" > /dev/null
           fi
+          if [ ! -f "$PLAT/android.jar" ]; then
+            echo "Installing platforms;android-$TARGET_SDK"
+            yes | "$SDKMANAGER" "platforms;android-$TARGET_SDK" > /dev/null
+          fi
+
+          # Fail loudly rather than silently building against a different SDK.
+          test -x "$BT/aapt2" || { echo "::error::aapt2 missing in $BT"; exit 1; }
+          test -f "$PLAT/android.jar" || { echo "::error::android.jar missing at $PLAT"; exit 1; }
+
           echo "$BT" >> "$GITHUB_PATH"
+          echo "ANDROID_JAR=$PLAT/android.jar" >> "$GITHUB_ENV"
+          echo "pinned: build-tools=$BUILD_TOOLS platform=android-$TARGET_SDK"
 
-          JAR=$(ls -d "$ANDROID_HOME"/platforms/android-*/android.jar 2>/dev/null | sort -V | tail -1 || true)
-          if [ -z "$JAR" ]; then
-            echo "No platform found, installing..."
-            yes | "$SDKMANAGER" "platforms;android-35" >/dev/null
-            JAR=$(ls -d "$ANDROID_HOME"/platforms/android-*/android.jar | sort -V | tail -1)
+      # The same keystore is used by local phone builds, so artifacts are
+      # interchangeable instead of each machine minting its own debug key.
+      - name: Restore signing key
+        env:
+          KEYSTORE_B64: ${{ secrets.KEYSTORE_B64 }}
+        run: |
+          set -e
+          if [ -z "$KEYSTORE_B64" ]; then
+            echo "::warning::No KEYSTORE_B64 secret; falling back to a throwaway debug key."
+            exit 0
           fi
-
-          TARGET=$(basename "$(dirname "$JAR")" | sed 's/android-//')
-          echo "ANDROID_JAR=$JAR" >> "$GITHUB_ENV"
-          echo "TARGET_SDK=$TARGET" >> "$GITHUB_ENV"
-          echo "build-tools : $BT"
-          echo "android.jar : $JAR"
+          KS="$RUNNER_TEMP/release.keystore"
+          printf '%s' "$KEYSTORE_B64" | base64 -d > "$KS"
+          chmod 600 "$KS"
+          test -s "$KS" || { echo "::error::Keystore decode produced an empty file"; exit 1; }
+          echo "KEYSTORE=$KS" >> "$GITHUB_ENV"
+          echo "Signing key restored ($(stat -c %s "$KS") bytes)"
 
       - name: Build and sign
+        env:
+          KS_PASS: ${{ secrets.KS_PASS }}
+          KS_ALIAS: ${{ secrets.KS_ALIAS }}
         run: |
-          echo "java: $(javac -version 2>&1)"
+          echo "javac: $(javac -version 2>&1)"
           echo "aapt2: $(aapt2 version 2>&1)"
           sh build-apk.sh
 
       - name: Smoke test the APK
         run: |
           APK=build/com.harness.habits.apk
-          test -f "$APK" || { echo "APK missing"; exit 1; }
+          test -f "$APK" || { echo "::error::APK missing"; exit 1; }
+
           echo "--- signature"
           apksigner verify --print-certs "$APK" | head -3
+
           echo "--- manifest"
-          aapt2 dump badging "$APK" | grep -E "^(package|launchable-activity|sdkVersion|targetSdkVersion|application-label)"
+          aapt2 dump badging "$APK" | grep -E "^(package|launchable-activity|application-label|sdkVersion|targetSdkVersion)"
+
           echo "--- resources.arsc must be Stored for Android 11+"
           unzip -lv "$APK" | grep resources.arsc
+
+          # Guard against a accidental fall-back to a debug key.
+          if apksigner verify --print-certs "$APK" | grep -q "CN=Android Debug"; then
+            echo "::warning::Signed with a debug key, not the shared release key"
+          else
+            echo "OK: signed with the shared release key"
+          fi
+
           echo "size: $(stat -c %s "$APK") bytes"
 
       - name: Upload APK
