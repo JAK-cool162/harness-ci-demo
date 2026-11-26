@@ -1,0 +1,72 @@
+name: Build APK
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      # The runner already ships an Android SDK. Reuse it instead of downloading one.
+      - name: Resolve Android toolchain
+        run: |
+          set -e
+          SDKMANAGER="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
+
+          BT=$(ls -d "$ANDROID_HOME"/build-tools/* 2>/dev/null | sort -V | tail -1 || true)
+          if [ -z "$BT" ]; then
+            echo "No build-tools found, installing..."
+            yes | "$SDKMANAGER" "build-tools;35.0.0" >/dev/null
+            BT=$(ls -d "$ANDROID_HOME"/build-tools/* | sort -V | tail -1)
+          fi
+          echo "$BT" >> "$GITHUB_PATH"
+
+          JAR=$(ls -d "$ANDROID_HOME"/platforms/android-*/android.jar 2>/dev/null | sort -V | tail -1 || true)
+          if [ -z "$JAR" ]; then
+            echo "No platform found, installing..."
+            yes | "$SDKMANAGER" "platforms;android-35" >/dev/null
+            JAR=$(ls -d "$ANDROID_HOME"/platforms/android-*/android.jar | sort -V | tail -1)
+          fi
+
+          TARGET=$(basename "$(dirname "$JAR")" | sed 's/android-//')
+          echo "ANDROID_JAR=$JAR" >> "$GITHUB_ENV"
+          echo "TARGET_SDK=$TARGET" >> "$GITHUB_ENV"
+          echo "build-tools : $BT"
+          echo "android.jar : $JAR"
+
+      - name: Build and sign
+        run: |
+          echo "java: $(javac -version 2>&1)"
+          echo "aapt2: $(aapt2 version 2>&1)"
+          sh build-apk.sh
+
+      - name: Smoke test the APK
+        run: |
+          APK=build/com.harness.habits.apk
+          test -f "$APK" || { echo "APK missing"; exit 1; }
+          echo "--- signature"
+          apksigner verify --print-certs "$APK" | head -3
+          echo "--- manifest"
+          aapt2 dump badging "$APK" | grep -E "^(package|launchable-activity|sdkVersion|targetSdkVersion|application-label)"
+          echo "--- resources.arsc must be Stored for Android 11+"
+          unzip -lv "$APK" | grep resources.arsc
+          echo "size: $(stat -c %s "$APK") bytes"
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: habits-apk
+          path: build/com.harness.habits.apk
+          if-no-files-found: error
+          retention-days: 7

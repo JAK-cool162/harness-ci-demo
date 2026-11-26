@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="bg">#0B0F14</color>
+    <color name="card">#151C24</color>
+    <color name="text">#F2F4F7</color>
+    <color name="muted">#98A2B3</color>
+    <color name="accent">#34D399</color>
+    <color name="accent_soft">#0E3B2E</color>
+    <color name="ring">#2A3440</color>
+    <color name="hairline">#1F2833</color>
+</resources>

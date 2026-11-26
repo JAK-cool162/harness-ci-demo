@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Habits</string>
+    <string name="screen_title">Habits</string>
+    <string name="add_habit">+  New habit</string>
+    <string name="sub_empty">Tap the button below to begin</string>
+    <string name="sub_progress">%1$d of %2$d done today</string>
+    <string name="empty_hint">No habits yet.\n\nCreate one, then check it off each day. Your streak builds on its own.</string>
+    <string name="dialog_new_title">New habit</string>
+    <string name="dialog_add">Add</string>
+    <string name="dialog_cancel">Cancel</string>
+    <string name="hint_name">e.g. Read 10 pages</string>
+    <string name="dialog_delete_title">Delete habit?</string>
+    <string name="dialog_delete_msg">\"%1$s\" and its history will be removed.</string>
+    <string name="dialog_delete">Delete</string>
+</resources>
